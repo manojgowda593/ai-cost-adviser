@@ -44,7 +44,14 @@ from openai import (
 )
 
 
+# The OpenAI SDK is wire-compatible with several providers (OpenAI, Groq,
+# OpenRouter, Gemini's compat endpoint, …). Point it at a different provider by
+# setting OPENAI_BASE_URL + a matching OPENAI_MODEL; no code change needed.
+#   OpenAI: base_url unset, model "gpt-4o"
+#   Groq:   OPENAI_BASE_URL=https://api.groq.com/openai/v1, model e.g.
+#           "llama-3.3-70b-versatile"
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+BASE_URL = os.getenv("OPENAI_BASE_URL")  # None -> default OpenAI endpoint
 
 
 class AIAnalyzerError(Exception):
@@ -111,9 +118,11 @@ def _get_client() -> OpenAI:
     if not api_key:
         raise AIAnalyzerError(
             "OPENAI_API_KEY is not set.",
-            hint="Copy backend/.env.example to backend/.env and add your OpenAI API key.",
+            hint="Set OPENAI_API_KEY in the root .env (your OpenAI or Groq key). "
+            "For Groq, also set OPENAI_BASE_URL=https://api.groq.com/openai/v1.",
         )
-    return OpenAI(api_key=api_key)
+    # base_url=None makes the SDK use the default OpenAI endpoint.
+    return OpenAI(api_key=api_key, base_url=BASE_URL)
 
 
 def analyze_resources(resources: list[dict], region: str | None = None) -> dict:
