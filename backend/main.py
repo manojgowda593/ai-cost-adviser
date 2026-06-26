@@ -41,6 +41,9 @@ from ai_analyzer import AIAnalyzerError
 import db
 from db import DBNotConfigured
 from progress import hub
+import auth
+from auth import AuthError, current_user_id
+from fastapi import Depends
 
 # Load backend/.env (OPENAI_API_KEY, OPENAI_MODEL, DATABASE_URL) before os.getenv reads.
 load_dotenv()
@@ -83,9 +86,11 @@ class AnalyzeRequest(BaseModel):
         description="AWS region for regional services, e.g. 'ap-south-1'. "
         "Falls back to the environment/profile default if omitted.",
     )
-    # TODO: replace with the authenticated user's id once JWT auth is added
-    # (later prompt). For now the client may pass a user_id, or omit it.
-    user_id: Optional[int] = Field(default=None, description="Owning user id (temp).")
+
+
+class AuthRequest(BaseModel):
+    email: str = Field(..., description="User email.")
+    password: str = Field(..., min_length=6, description="User password (min 6 chars).")
 
 
 # --------------------------------------------------------------------------- #
@@ -110,6 +115,25 @@ def _raise_http(e: ScannerError):
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+# Auth (step ①)                                                                #
+# --------------------------------------------------------------------------- #
+@app.post("/api/auth/signup")
+async def signup(req: AuthRequest):
+    try:
+        return await auth.signup(req.email, req.password)
+    except AuthError as e:
+        raise HTTPException(status_code=e.status, detail={"message": e.message})
+
+
+@app.post("/api/auth/login")
+async def login(req: AuthRequest):
+    try:
+        return await auth.login(req.email, req.password)
+    except AuthError as e:
+        raise HTTPException(status_code=e.status, detail={"message": e.message})
 
 
 @app.get("/api/services")
@@ -206,20 +230,21 @@ _mem_counter = {"n": 0}
 
 
 @app.post("/api/analyze")
-async def analyze(req: AnalyzeRequest):
+async def analyze(req: AnalyzeRequest, user_id: int = Depends(current_user_id)):
     """
-    Start an analysis. Returns immediately with an `analysis_id` plus the final
-    result. The client should open ws/progress/{analysis_id} to watch live
-    progress; because the pipeline runs while the request is in flight, late
+    Start an analysis for the authenticated user. Returns the final result plus
+    an `analysis_id`; the client opens ws/progress/{analysis_id} to watch live
+    progress. Because the pipeline runs while the request is in flight, late
     WebSocket joiners still get the buffered backlog from the progress hub.
     """
     _validate_services(req.services)
 
     # Create a pending DB row up front so we have a stable analysis_id and a
-    # durable record. Falls back to an in-memory id if no DB is configured.
+    # durable record owned by the authenticated user. Falls back to an
+    # in-memory id if no DB is configured.
     if db.is_connected():
         try:
-            row_id = await db.create_analysis(req.user_id, ", ".join(req.services))
+            row_id = await db.create_analysis(user_id, ", ".join(req.services))
             analysis_id = str(row_id)
         except DBNotConfigured:
             _mem_counter["n"] += 1
@@ -232,11 +257,8 @@ async def analyze(req: AnalyzeRequest):
 
 
 @app.get("/api/history")
-async def history(user_id: Optional[int] = None, limit: int = 50):
-    """
-    Past analyses, newest first. `user_id` is optional for now; once JWT auth
-    lands it will come from the authenticated token instead of a query param.
-    """
+async def history(user_id: int = Depends(current_user_id), limit: int = 50):
+    """Past analyses for the authenticated user, newest first."""
     if not db.is_connected():
         raise HTTPException(
             status_code=503,
