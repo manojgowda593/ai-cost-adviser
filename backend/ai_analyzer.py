@@ -121,8 +121,8 @@ def _get_client() -> OpenAI:
             hint="Set OPENAI_API_KEY in the root .env (your OpenAI or Groq key). "
             "For Groq, also set OPENAI_BASE_URL=https://api.groq.com/openai/v1.",
         )
-    # base_url=None makes the SDK use the default OpenAI endpoint.
-    return OpenAI(api_key=api_key, base_url=BASE_URL)
+    # Read base_url at call time (not import time). None -> default OpenAI endpoint.
+    return OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL"))
 
 
 def analyze_resources(resources: list[dict], region: str | None = None) -> dict:
@@ -141,9 +141,13 @@ def analyze_resources(resources: list[dict], region: str | None = None) -> dict:
 
     client = _get_client()
 
+    # Read the model at call time (not import time) so it always reflects the
+    # current environment, regardless of when .env was loaded.
+    model = os.getenv("OPENAI_MODEL", "gpt-4o")
+
     try:
         response = client.chat.completions.create(
-            model=MODEL,
+            model=model,
             # response_format forces strict JSON so we can parse reliably.
             response_format={"type": "json_object"},
             temperature=0.2,

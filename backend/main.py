@@ -28,6 +28,13 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from pathlib import Path
+
+# Load the centralized root .env (one dir up from backend/) BEFORE importing any
+# local module, because some modules read os.getenv at import time. Falls back to
+# a local .env / process env if the root file is absent.
+_ROOT_ENV = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=_ROOT_ENV if _ROOT_ENV.exists() else None)
 
 import aws_scanner
 from aws_scanner import (
@@ -44,13 +51,6 @@ from progress import hub
 import auth
 from auth import AuthError, current_user_id
 from fastapi import Depends
-from pathlib import Path
-
-# Load the centralized root .env (one dir up from backend/) so OPENAI_API_KEY,
-# DATABASE_URL, JWT_SECRET, etc. are available before anything reads os.getenv.
-# Falls back to a local .env / process env if the root file is absent.
-_ROOT_ENV = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(dotenv_path=_ROOT_ENV if _ROOT_ENV.exists() else None)
 
 
 @asynccontextmanager
