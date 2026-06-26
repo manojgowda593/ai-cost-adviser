@@ -302,13 +302,380 @@ def scan_rds(region: str | None) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
+# Additional scanners — popular, cost-relevant services. Each follows the same  #
+# uniform shape and degrades on per-resource errors.                            #
+# --------------------------------------------------------------------------- #
+def scan_ebs_snapshots(region: str | None) -> list[dict]:
+    """Self-owned EBS snapshots — old/orphaned snapshots are a common cost leak."""
+    ec2 = _client("ec2", region)
+    out: list[dict] = []
+    paginator = ec2.get_paginator("describe_snapshots")
+    for page in paginator.paginate(OwnerIds=["self"]):
+        for snap in page["Snapshots"]:
+            tags = _tags_to_dict(snap.get("Tags"))
+            out.append(
+                {
+                    "service": "EBS Snapshot",
+                    "category": "Storage",
+                    "resource_id": snap["SnapshotId"],
+                    "name": _name_from_tags(tags, snap["SnapshotId"]),
+                    "region": region,
+                    "type": "snapshot",
+                    "config": {
+                        "volume_size_gb": snap.get("VolumeSize"),
+                        "start_time": str(snap.get("StartTime")),
+                        "source_volume": snap.get("VolumeId"),
+                        "state": snap.get("State"),
+                    },
+                    "tags": tags,
+                }
+            )
+    return out
+
+
+def scan_eip(region: str | None) -> list[dict]:
+    """Elastic IPs — an UNASSOCIATED EIP is billed hourly for doing nothing."""
+    ec2 = _client("ec2", region)
+    out: list[dict] = []
+    for addr in ec2.describe_addresses().get("Addresses", []):
+        tags = _tags_to_dict(addr.get("Tags"))
+        associated = bool(addr.get("AssociationId"))
+        out.append(
+            {
+                "service": "Elastic IP",
+                "category": "Network",
+                "resource_id": addr.get("AllocationId") or addr.get("PublicIp"),
+                "name": _name_from_tags(tags, addr.get("PublicIp", "eip")),
+                "region": region,
+                "type": "elastic-ip",
+                "config": {
+                    "public_ip": addr.get("PublicIp"),
+                    "associated": associated,  # False = wasted spend
+                    "associated_instance": addr.get("InstanceId"),
+                },
+                "tags": tags,
+            }
+        )
+    return out
+
+
+def scan_load_balancers(region: str | None) -> list[dict]:
+    """ELBv2 (ALB/NLB) — load balancers with no targets are idle but billed."""
+    elb = _client("elbv2", region)
+    out: list[dict] = []
+    paginator = elb.get_paginator("describe_load_balancers")
+    for page in paginator.paginate():
+        for lb in page["LoadBalancers"]:
+            arn = lb["LoadBalancerArn"]
+            target_count = None
+            try:
+                tgs = elb.describe_target_groups(LoadBalancerArn=arn).get("TargetGroups", [])
+                target_count = 0
+                for tg in tgs:
+                    h = elb.describe_target_health(TargetGroupArn=tg["TargetGroupArn"])
+                    target_count += len(h.get("TargetHealthDescriptions", []))
+            except ClientError:
+                pass
+            out.append(
+                {
+                    "service": "Load Balancer",
+                    "category": "Network",
+                    "resource_id": lb["LoadBalancerName"],
+                    "name": lb["LoadBalancerName"],
+                    "region": region,
+                    "type": lb.get("Type"),  # application / network / gateway
+                    "config": {
+                        "scheme": lb.get("Scheme"),
+                        "state": lb.get("State", {}).get("Code"),
+                        "target_count": target_count,  # 0 = idle, likely wasted
+                    },
+                    "tags": {},
+                }
+            )
+    return out
+
+
+def scan_nat_gateways(region: str | None) -> list[dict]:
+    """NAT gateways — expensive (hourly + data). An unused one is real money."""
+    ec2 = _client("ec2", region)
+    out: list[dict] = []
+    paginator = ec2.get_paginator("describe_nat_gateways")
+    for page in paginator.paginate():
+        for nat in page["NatGateways"]:
+            tags = _tags_to_dict(nat.get("Tags"))
+            out.append(
+                {
+                    "service": "NAT Gateway",
+                    "category": "Network",
+                    "resource_id": nat["NatGatewayId"],
+                    "name": _name_from_tags(tags, nat["NatGatewayId"]),
+                    "region": region,
+                    "type": "nat-gateway",
+                    "config": {
+                        "state": nat.get("State"),
+                        "vpc_id": nat.get("VpcId"),
+                        "subnet_id": nat.get("SubnetId"),
+                    },
+                    "tags": tags,
+                }
+            )
+    return out
+
+
+def scan_lambda(region: str | None) -> list[dict]:
+    """Lambda functions — oversized memory or unused functions add up at scale."""
+    lam = _client("lambda", region)
+    out: list[dict] = []
+    paginator = lam.get_paginator("list_functions")
+    for page in paginator.paginate():
+        for fn in page["Functions"]:
+            out.append(
+                {
+                    "service": "Lambda",
+                    "category": "Compute",
+                    "resource_id": fn["FunctionName"],
+                    "name": fn["FunctionName"],
+                    "region": region,
+                    "type": fn.get("Runtime"),
+                    "config": {
+                        "memory_mb": fn.get("MemorySize"),
+                        "timeout_s": fn.get("Timeout"),
+                        "last_modified": fn.get("LastModified"),
+                        "architecture": (fn.get("Architectures") or [None])[0],
+                    },
+                    "tags": {},
+                }
+            )
+    return out
+
+
+def scan_ecs(region: str | None) -> list[dict]:
+    """ECS clusters — running services/tasks drive Fargate/EC2 compute cost."""
+    ecs = _client("ecs", region)
+    out: list[dict] = []
+    cluster_arns = []
+    paginator = ecs.get_paginator("list_clusters")
+    for page in paginator.paginate():
+        cluster_arns.extend(page.get("clusterArns", []))
+    if not cluster_arns:
+        return out
+    desc = ecs.describe_clusters(clusters=cluster_arns).get("clusters", [])
+    for c in desc:
+        out.append(
+            {
+                "service": "ECS",
+                "category": "Compute",
+                "resource_id": c["clusterName"],
+                "name": c["clusterName"],
+                "region": region,
+                "type": "ecs-cluster",
+                "config": {
+                    "status": c.get("status"),
+                    "running_tasks": c.get("runningTasksCount"),
+                    "active_services": c.get("activeServicesCount"),
+                    "registered_instances": c.get("registeredContainerInstancesCount"),
+                },
+                "tags": {},
+            }
+        )
+    return out
+
+
+def scan_eks(region: str | None) -> list[dict]:
+    """EKS clusters — the control plane is billed hourly per cluster."""
+    eks = _client("eks", region)
+    out: list[dict] = []
+    paginator = eks.get_paginator("list_clusters")
+    names: list[str] = []
+    for page in paginator.paginate():
+        names.extend(page.get("clusters", []))
+    for name in names:
+        try:
+            c = eks.describe_cluster(name=name)["cluster"]
+        except ClientError:
+            continue
+        out.append(
+            {
+                "service": "EKS",
+                "category": "Compute",
+                "resource_id": name,
+                "name": name,
+                "region": region,
+                "type": "eks-cluster",
+                "config": {
+                    "status": c.get("status"),
+                    "version": c.get("version"),
+                },
+                "tags": c.get("tags", {}) or {},
+            }
+        )
+    return out
+
+
+def scan_dynamodb(region: str | None) -> list[dict]:
+    """DynamoDB tables — provisioned-but-underused capacity wastes money."""
+    ddb = _client("dynamodb", region)
+    out: list[dict] = []
+    paginator = ddb.get_paginator("list_tables")
+    names: list[str] = []
+    for page in paginator.paginate():
+        names.extend(page.get("TableNames", []))
+    for name in names:
+        try:
+            t = ddb.describe_table(TableName=name)["Table"]
+        except ClientError:
+            continue
+        billing = t.get("BillingModeSummary", {}).get("BillingMode", "PROVISIONED")
+        prov = t.get("ProvisionedThroughput", {})
+        out.append(
+            {
+                "service": "DynamoDB",
+                "category": "Database",
+                "resource_id": name,
+                "name": name,
+                "region": region,
+                "type": billing,  # PROVISIONED / PAY_PER_REQUEST
+                "config": {
+                    "item_count": t.get("ItemCount"),
+                    "size_bytes": t.get("TableSizeBytes"),
+                    "read_capacity": prov.get("ReadCapacityUnits"),
+                    "write_capacity": prov.get("WriteCapacityUnits"),
+                },
+                "tags": {},
+            }
+        )
+    return out
+
+
+def scan_elasticache(region: str | None) -> list[dict]:
+    """ElastiCache clusters (Redis/Memcached) — idle/oversized nodes cost money."""
+    ec = _client("elasticache", region)
+    out: list[dict] = []
+    paginator = ec.get_paginator("describe_cache_clusters")
+    for page in paginator.paginate():
+        for c in page["CacheClusters"]:
+            out.append(
+                {
+                    "service": "ElastiCache",
+                    "category": "Database",
+                    "resource_id": c["CacheClusterId"],
+                    "name": c["CacheClusterId"],
+                    "region": region,
+                    "type": c.get("CacheNodeType"),
+                    "config": {
+                        "engine": c.get("Engine"),
+                        "status": c.get("CacheClusterStatus"),
+                        "num_nodes": c.get("NumCacheNodes"),
+                    },
+                    "tags": {},
+                }
+            )
+    return out
+
+
+def scan_ebs_unused_amis(region: str | None) -> list[dict]:
+    """Self-owned AMIs — each retains backing snapshots that cost storage."""
+    ec2 = _client("ec2", region)
+    out: list[dict] = []
+    images = ec2.describe_images(Owners=["self"]).get("Images", [])
+    for img in images:
+        tags = _tags_to_dict(img.get("Tags"))
+        out.append(
+            {
+                "service": "AMI",
+                "category": "Storage",
+                "resource_id": img["ImageId"],
+                "name": _name_from_tags(tags, img.get("Name") or img["ImageId"]),
+                "region": region,
+                "type": "ami",
+                "config": {
+                    "creation_date": img.get("CreationDate"),
+                    "state": img.get("State"),
+                    "snapshot_count": len(
+                        [b for b in img.get("BlockDeviceMappings", []) if b.get("Ebs")]
+                    ),
+                },
+                "tags": tags,
+            }
+        )
+    return out
+
+
+def scan_cloudwatch_log_groups(region: str | None) -> list[dict]:
+    """CloudWatch log groups with NO retention keep logs forever — silent cost."""
+    logs = _client("logs", region)
+    out: list[dict] = []
+    paginator = logs.get_paginator("describe_log_groups")
+    for page in paginator.paginate():
+        for lg in page["logGroups"]:
+            out.append(
+                {
+                    "service": "CloudWatch Logs",
+                    "category": "Monitoring",
+                    "resource_id": lg["logGroupName"],
+                    "name": lg["logGroupName"],
+                    "region": region,
+                    "type": "log-group",
+                    "config": {
+                        "stored_bytes": lg.get("storedBytes"),
+                        "retention_days": lg.get("retentionInDays"),  # None = never expires
+                    },
+                    "tags": {},
+                }
+            )
+    return out
+
+
+def scan_elb_classic(region: str | None) -> list[dict]:
+    """Classic Load Balancers (ELB) — legacy, often forgotten and idle."""
+    elb = _client("elb", region)
+    out: list[dict] = []
+    paginator = elb.get_paginator("describe_load_balancers")
+    for page in paginator.paginate():
+        for lb in page["LoadBalancerDescriptions"]:
+            out.append(
+                {
+                    "service": "Classic LB",
+                    "category": "Network",
+                    "resource_id": lb["LoadBalancerName"],
+                    "name": lb["LoadBalancerName"],
+                    "region": region,
+                    "type": "classic-elb",
+                    "config": {
+                        "scheme": lb.get("Scheme"),
+                        "instance_count": len(lb.get("Instances", [])),  # 0 = idle
+                    },
+                    "tags": {},
+                }
+            )
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # The registry. This IS the "list of scannable services" the API exposes.      #
 # --------------------------------------------------------------------------- #
 SERVICE_REGISTRY: dict[str, dict] = {
+    # Compute
     "ec2": {"label": "EC2", "category": "Compute", "scan": scan_ec2, "regional": True},
+    "lambda": {"label": "Lambda", "category": "Compute", "scan": scan_lambda, "regional": True},
+    "ecs": {"label": "ECS", "category": "Compute", "scan": scan_ecs, "regional": True},
+    "eks": {"label": "EKS", "category": "Compute", "scan": scan_eks, "regional": True},
+    # Storage
     "ebs": {"label": "EBS", "category": "Storage", "scan": scan_ebs, "regional": True},
+    "ebs_snapshots": {"label": "EBS Snapshots", "category": "Storage", "scan": scan_ebs_snapshots, "regional": True},
+    "ami": {"label": "AMIs", "category": "Storage", "scan": scan_ebs_unused_amis, "regional": True},
     "s3": {"label": "S3", "category": "Storage", "scan": scan_s3, "regional": False},
+    # Database
     "rds": {"label": "RDS", "category": "Database", "scan": scan_rds, "regional": True},
+    "dynamodb": {"label": "DynamoDB", "category": "Database", "scan": scan_dynamodb, "regional": True},
+    "elasticache": {"label": "ElastiCache", "category": "Database", "scan": scan_elasticache, "regional": True},
+    # Network
+    "eip": {"label": "Elastic IPs", "category": "Network", "scan": scan_eip, "regional": True},
+    "elb": {"label": "Load Balancers", "category": "Network", "scan": scan_load_balancers, "regional": True},
+    "elb_classic": {"label": "Classic LBs", "category": "Network", "scan": scan_elb_classic, "regional": True},
+    "nat": {"label": "NAT Gateways", "category": "Network", "scan": scan_nat_gateways, "regional": True},
+    # Monitoring
+    "logs": {"label": "CloudWatch Logs", "category": "Monitoring", "scan": scan_cloudwatch_log_groups, "regional": True},
 }
 
 

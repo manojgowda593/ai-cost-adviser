@@ -27,6 +27,7 @@ export default function Dashboard() {
   const [services, setServices] = useState<ServiceInfo[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [region, setRegion] = useState("us-east-1");
+  const [search, setSearch] = useState("");
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
   const [running, setRunning] = useState(false);
@@ -47,6 +48,18 @@ export default function Dashboard() {
       next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
+  }
+
+  function selectKeys(keys: string[], on: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      keys.forEach((k) => (on ? next.add(k) : next.delete(k)));
+      return next;
+    });
+  }
+
+  function clearAll() {
+    setSelected(new Set());
   }
 
   async function runAnalysis() {
@@ -73,8 +86,14 @@ export default function Dashboard() {
     }
   }
 
-  // Group services by category for a tidy display.
-  const byCategory = services.reduce<Record<string, ServiceInfo[]>>((acc, s) => {
+  // Filter by the search box (matches label or category), then group by category.
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? services.filter(
+        (s) => s.label.toLowerCase().includes(q) || s.category.toLowerCase().includes(q)
+      )
+    : services;
+  const byCategory = filtered.reduce<Record<string, ServiceInfo[]>>((acc, s) => {
     (acc[s.category] ??= []).push(s);
     return acc;
   }, {});
@@ -107,29 +126,70 @@ export default function Dashboard() {
           ))}
         </select>
 
-        {/* Services grouped by category */}
-        <label className="block text-sm font-medium text-gray-300 mb-2">Services</label>
+        {/* Services: search + select controls */}
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-sm font-medium text-gray-300">Services</label>
+          <div className="flex items-center gap-3 text-xs">
+            <button
+              type="button"
+              onClick={() => selectKeys(filtered.map((s) => s.key), true)}
+              className="text-accent hover:underline"
+            >
+              Select all{q ? " (filtered)" : ""}
+            </button>
+            <button type="button" onClick={clearAll} className="text-gray-400 hover:text-white">
+              Clear all
+            </button>
+          </div>
+        </div>
+
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search services (e.g. ec2, storage, lambda)…"
+          className="mb-4 w-full rounded-md bg-ink-900 border border-ink-600 px-3 py-2 text-sm text-gray-100 focus:border-accent focus:outline-none"
+        />
+
         <div className="grid gap-4 sm:grid-cols-3">
-          {Object.entries(byCategory).map(([cat, list]) => (
-            <div key={cat}>
-              <div className="text-xs uppercase tracking-wide text-gray-500 mb-2">{cat}</div>
-              <div className="space-y-2">
-                {list.map((s) => (
-                  <label key={s.key} className="flex items-center gap-2 text-sm text-gray-200 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(s.key)}
-                      onChange={() => toggle(s.key)}
-                      className="accent-accent"
-                    />
-                    {s.label}
-                  </label>
-                ))}
+          {Object.entries(byCategory).map(([cat, list]) => {
+            const catKeys = list.map((s) => s.key);
+            const allSelected = catKeys.every((k) => selected.has(k));
+            return (
+              <div key={cat}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs uppercase tracking-wide text-gray-500">{cat}</span>
+                  <button
+                    type="button"
+                    onClick={() => selectKeys(catKeys, !allSelected)}
+                    className="text-[10px] text-accent hover:underline"
+                  >
+                    {allSelected ? "none" : "all"}
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {list.map((s) => (
+                    <label key={s.key} className="flex items-center gap-2 text-sm text-gray-200 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(s.key)}
+                        onChange={() => toggle(s.key)}
+                        className="accent-accent"
+                      />
+                      {s.label}
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {services.length === 0 && !loadErr && (
             <div className="text-sm text-gray-500">Loading services…</div>
+          )}
+          {services.length > 0 && filtered.length === 0 && (
+            <div className="text-sm text-gray-500 sm:col-span-3">
+              No services match “{search}”.
+            </div>
           )}
         </div>
 
