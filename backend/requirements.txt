@@ -4,3 +4,5 @@ boto3==1.40.0
 pydantic==2.10.4
 openai==1.59.6
 python-dotenv==1.0.1
+asyncpg==0.30.0
+websockets==14.1
