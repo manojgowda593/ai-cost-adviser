@@ -8,3 +8,4 @@ asyncpg==0.30.0
 websockets==14.1
 PyJWT==2.10.1
 bcrypt==4.2.1
+httpx==0.28.1

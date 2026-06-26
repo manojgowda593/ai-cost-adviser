@@ -1,4 +1,6 @@
+# Centralized secrets — ignore real .env everywhere, but keep the example.
 .env
+!.env.example
 
 __pycache__/
 *.pyc

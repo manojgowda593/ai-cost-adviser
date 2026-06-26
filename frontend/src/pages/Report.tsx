@@ -45,32 +45,44 @@ function CopyButton({ text }: { text: string }) {
 export function ReportView({
   analysis,
   scannedServices,
+  resourceCount,
   errors,
 }: {
   analysis: Analysis;
   scannedServices?: string[];
+  resourceCount?: number;
   errors?: { service: string; error: string; hint?: string }[];
 }) {
   const issues = analysis.issues ?? [];
   return (
     <div className="space-y-6">
-      {/* Summary + savings */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <div className="md:col-span-2 rounded-lg border border-ink-700 bg-ink-800 p-5">
-          <h2 className="text-sm font-semibold text-gray-400 mb-2">Summary</h2>
+      {/* Summary card: resources scanned, issues found, estimated savings */}
+      <div className="rounded-lg border border-ink-700 bg-ink-800 p-5">
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <div className="text-xs uppercase tracking-wide text-gray-500">Resources scanned</div>
+            <div className="text-3xl font-bold text-gray-100">
+              {resourceCount ?? "—"}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs uppercase tracking-wide text-gray-500">Issues found</div>
+            <div className="text-3xl font-bold text-amber-300">{issues.length}</div>
+          </div>
+          <div>
+            <div className="text-xs uppercase tracking-wide text-gray-500">Estimated savings</div>
+            <div className="text-3xl font-bold text-green-400">
+              ${Number(analysis.total_estimated_savings_usd ?? 0).toLocaleString()}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 border-t border-ink-700 pt-4">
+          <h2 className="text-sm font-semibold text-gray-400 mb-1">Summary</h2>
           <p className="text-gray-100 text-sm leading-relaxed">{analysis.summary}</p>
           {scannedServices && scannedServices.length > 0 && (
-            <p className="mt-3 text-xs text-gray-500">
-              Scanned: {scannedServices.join(", ")}
-            </p>
+            <p className="mt-2 text-xs text-gray-500">Scanned: {scannedServices.join(", ")}</p>
           )}
-        </div>
-        <div className="rounded-lg border border-ink-700 bg-ink-800 p-5 flex flex-col justify-center">
-          <h2 className="text-sm font-semibold text-gray-400 mb-1">Estimated savings</h2>
-          <p className="text-3xl font-bold text-green-400">
-            ${Number(analysis.total_estimated_savings_usd ?? 0).toLocaleString()}
-          </p>
-          <p className="text-xs text-gray-500 mt-1">{issues.length} issue(s) found</p>
         </div>
       </div>
 
@@ -167,6 +179,7 @@ export default function Report() {
       <ReportView
         analysis={result.analysis}
         scannedServices={result.scanned_services}
+        resourceCount={result.resource_count}
         errors={result.errors}
       />
     </div>

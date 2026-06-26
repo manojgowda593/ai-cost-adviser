@@ -44,9 +44,13 @@ from progress import hub
 import auth
 from auth import AuthError, current_user_id
 from fastapi import Depends
+from pathlib import Path
 
-# Load backend/.env (OPENAI_API_KEY, OPENAI_MODEL, DATABASE_URL) before os.getenv reads.
-load_dotenv()
+# Load the centralized root .env (one dir up from backend/) so OPENAI_API_KEY,
+# DATABASE_URL, JWT_SECRET, etc. are available before anything reads os.getenv.
+# Falls back to a local .env / process env if the root file is absent.
+_ROOT_ENV = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=_ROOT_ENV if _ROOT_ENV.exists() else None)
 
 
 @asynccontextmanager
@@ -61,7 +65,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Cloud Cost Detective — API", version="0.1.0", lifespan=lifespan)
 
-# CORS for the Vite dev server (same origin the Azure prompt specified).
+# CORS for the Vite dev server.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -211,7 +215,10 @@ async def _run_analysis(analysis_id: str, req: AnalyzeRequest) -> dict:
             pass  # DB went away mid-run; the in-memory result is still returned.
 
     await hub.push(analysis_id, "Analysis complete")
-    hub.clear(analysis_id)
+    # Intentionally do NOT clear the backlog here: the browser opens the
+    # WebSocket right after /api/analyze returns the id, so it must still be
+    # able to replay the full step list. Old backlogs are evicted by the
+    # hub's MAX_BACKLOGS cap.
 
     return {
         "analysis_id": analysis_id,

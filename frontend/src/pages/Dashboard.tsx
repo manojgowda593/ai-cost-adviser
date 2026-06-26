@@ -161,6 +161,7 @@ export default function Dashboard() {
           <ReportView
             analysis={result.analysis}
             scannedServices={result.scanned_services}
+            resourceCount={result.resource_count}
             errors={result.errors}
           />
         </div>

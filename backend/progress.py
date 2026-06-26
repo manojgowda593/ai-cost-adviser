@@ -20,10 +20,17 @@ from fastapi import WebSocket
 
 
 class ProgressHub:
+    # Keep backlogs for the most recent N analyses so a client that connects
+    # AFTER the analysis finished (e.g. the browser opens the socket right after
+    # /api/analyze returns the id) still replays the full step list. Bounded so
+    # memory can't grow without limit.
+    MAX_BACKLOGS = 200
+
     def __init__(self) -> None:
         # analysis_id -> set of connected sockets
         self._subscribers: Dict[str, Set[WebSocket]] = {}
-        # analysis_id -> ordered list of messages already sent (for late joiners)
+        # analysis_id -> ordered list of messages already sent (for late joiners).
+        # Insertion order = age, so we can evict the oldest when over the cap.
         self._backlog: Dict[str, List[str]] = {}
         self._lock = asyncio.Lock()
 
@@ -48,6 +55,13 @@ class ProgressHub:
         """Send a progress message to all sockets on this analysis, and buffer it."""
         async with self._lock:
             self._backlog.setdefault(analysis_id, []).append(message)
+            # Evict oldest backlogs if we're over the cap (but never the one we
+            # just appended to).
+            while len(self._backlog) > self.MAX_BACKLOGS:
+                oldest = next(iter(self._backlog))
+                if oldest == analysis_id:
+                    break
+                self._backlog.pop(oldest, None)
             targets = list(self._subscribers.get(analysis_id, []))
         dead: List[WebSocket] = []
         for ws in targets:
@@ -60,7 +74,11 @@ class ProgressHub:
                 await self.disconnect(analysis_id, ws)
 
     def clear(self, analysis_id: str) -> None:
-        """Drop the backlog once an analysis is fully done (best-effort cleanup)."""
+        """
+        Explicit backlog drop. NOT called automatically on completion — we keep
+        the backlog so a late-connecting client still replays the full sequence;
+        old backlogs are evicted by the MAX_BACKLOGS cap in push() instead.
+        """
         self._backlog.pop(analysis_id, None)
 
 

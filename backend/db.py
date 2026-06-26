@@ -22,11 +22,13 @@ not a resource group. Everything else matches the prompt 1:1.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Optional
 
 import asyncpg
 
+logger = logging.getLogger("ai_cost_adviser.db")
 
 # A module-level pool, created on startup and reused across requests.
 _pool: Optional[asyncpg.Pool] = None
@@ -72,20 +74,35 @@ async def init_db() -> bool:
     """
     Create the connection pool and tables on startup.
 
-    Returns True if the DB is connected, False if DATABASE_URL is unset (so the
-    app can still boot and serve non-DB endpoints in local dev). Any *other*
-    failure (bad URL, server down) is raised so it's not silently swallowed.
+    Returns True if the DB connected, False otherwise. The app always boots:
+      • DATABASE_URL unset      -> run without persistence (False)
+      • DATABASE_URL unreachable -> log a warning and run without persistence
+        (False), UNLESS DB_REQUIRED=true, in which case re-raise so a misconfigured
+        production deploy fails loudly instead of silently dropping history.
     """
     global _pool
     try:
         dsn = _dsn()
     except DBNotConfigured:
+        logger.info("DATABASE_URL not set — running without persistence (auth/history disabled).")
         return False
 
-    _pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=10)
-    async with _pool.acquire() as conn:
-        await conn.execute(CREATE_TABLES_SQL)
-    return True
+    try:
+        _pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=10)
+        async with _pool.acquire() as conn:
+            await conn.execute(CREATE_TABLES_SQL)
+        logger.info("Connected to PostgreSQL and ensured tables exist.")
+        return True
+    except Exception as e:
+        _pool = None
+        if os.getenv("DB_REQUIRED", "").lower() in ("1", "true", "yes"):
+            raise
+        logger.warning(
+            "Could not connect to the database (%s). Running without persistence; "
+            "auth/history will return 503. Set DB_REQUIRED=true to fail startup instead.",
+            e,
+        )
+        return False
 
 
 async def close_db() -> None:
