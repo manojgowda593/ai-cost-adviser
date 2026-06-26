@@ -26,6 +26,8 @@ engine, category grouping, and LLM summary downstream all consume the same thing
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import boto3
 from botocore.exceptions import (
     BotoCoreError,
@@ -33,6 +35,10 @@ from botocore.exceptions import (
     NoCredentialsError,
     EndpointConnectionError,
 )
+
+# How far back to look when assessing utilization. 14 days balances "recent
+# enough to be relevant" against "long enough to catch idle resources".
+METRIC_LOOKBACK_DAYS = 14
 
 
 # --------------------------------------------------------------------------- #
@@ -72,6 +78,45 @@ def _tags_to_dict(tag_list: list[dict] | None) -> dict[str, str]:
 
 def _name_from_tags(tags: dict[str, str], fallback: str) -> str:
     return tags.get("Name") or fallback
+
+
+def _ec2_cpu_utilization(cw, instance_id: str) -> dict | None:
+    """
+    Fetch average + maximum CPU utilization (%) for an EC2 instance over the
+    lookback window. This is the evidence the AI needs to legitimately call an
+    instance over-provisioned/idle — without it, "over-provisioned" is a guess.
+
+    Returns {avg_cpu_pct, max_cpu_pct, datapoints, lookback_days} or None if
+    CloudWatch has no data / the call is denied (we degrade gracefully rather
+    than fail the whole scan).
+    """
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=METRIC_LOOKBACK_DAYS)
+    try:
+        resp = cw.get_metric_statistics(
+            Namespace="AWS/EC2",
+            MetricName="CPUUtilization",
+            Dimensions=[{"Name": "InstanceId", "Value": instance_id}],
+            StartTime=start,
+            EndTime=end,
+            Period=3600,  # hourly datapoints
+            Statistics=["Average", "Maximum"],
+            Unit="Percent",
+        )
+    except ClientError:
+        return None
+
+    points = resp.get("Datapoints", [])
+    if not points:
+        return None
+    avgs = [p["Average"] for p in points if "Average" in p]
+    maxs = [p["Maximum"] for p in points if "Maximum" in p]
+    return {
+        "avg_cpu_pct": round(sum(avgs) / len(avgs), 2) if avgs else None,
+        "max_cpu_pct": round(max(maxs), 2) if maxs else None,
+        "datapoints": len(points),
+        "lookback_days": METRIC_LOOKBACK_DAYS,
+    }
 
 
 def _client(service: str, region: str | None):
@@ -124,12 +169,26 @@ def _run_scanner(fn, service_label: str, region: str | None):
 # --------------------------------------------------------------------------- #
 def scan_ec2(region: str | None) -> list[dict]:
     ec2 = _client("ec2", region)
+    cw = _client("cloudwatch", region)
     out: list[dict] = []
     paginator = ec2.get_paginator("describe_instances")
     for page in paginator.paginate():
         for reservation in page["Reservations"]:
             for inst in reservation["Instances"]:
                 tags = _tags_to_dict(inst.get("Tags"))
+                state = inst.get("State", {}).get("Name")
+                config = {
+                    "state": state,
+                    "launch_time": str(inst.get("LaunchTime")),
+                    "az": inst.get("Placement", {}).get("AvailabilityZone"),
+                    "platform": inst.get("PlatformDetails"),
+                }
+                # Only running instances have meaningful live CPU; a stopped one
+                # isn't billed for compute, so utilization is irrelevant there.
+                if state == "running":
+                    metrics = _ec2_cpu_utilization(cw, inst["InstanceId"])
+                    if metrics:
+                        config["cpu_utilization"] = metrics
                 out.append(
                     {
                         "service": "EC2",
@@ -138,12 +197,7 @@ def scan_ec2(region: str | None) -> list[dict]:
                         "name": _name_from_tags(tags, inst["InstanceId"]),
                         "region": region,
                         "type": inst.get("InstanceType"),
-                        "config": {
-                            "state": inst.get("State", {}).get("Name"),
-                            "launch_time": str(inst.get("LaunchTime")),
-                            "az": inst.get("Placement", {}).get("AvailabilityZone"),
-                            "platform": inst.get("PlatformDetails"),
-                        },
+                        "config": config,
                         "tags": tags,
                     }
                 )

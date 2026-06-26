@@ -21,6 +21,7 @@ WS   /ws/progress/{analysis_id}     -> live progress for one analysis.
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -65,10 +66,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Cloud Cost Detective — API", version="0.1.0", lifespan=lifespan)
 
-# CORS for the Vite dev server.
+# CORS: which browser origins may call this API. The frontend's origin must be
+# listed or preflight (OPTIONS) requests fail with 400 and the UI can't log in.
+# Set CORS_ORIGINS in .env as a comma-separated list (e.g. the EC2 URL); falls
+# back to localhost for local dev.
+_cors_env = os.getenv("CORS_ORIGINS", "").strip()
+_cors_origins = (
+    [o.strip() for o in _cors_env.split(",") if o.strip()]
+    if _cors_env
+    else ["http://localhost:5173", "http://127.0.0.1:5173"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

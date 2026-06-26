@@ -66,20 +66,35 @@ class AIAnalyzerError(Exception):
 # --------------------------------------------------------------------------- #
 # Prompt construction                                                          #
 # --------------------------------------------------------------------------- #
-SYSTEM_PROMPT = """You are an expert AWS cloud cost optimization analyst.
-You are given a list of AWS resources with their configuration. Analyze them for:
-  - over-provisioning (resources larger/more powerful than needed)
-  - unused or idle resources (e.g. unattached EBS volumes, stopped-but-billed resources)
-  - misconfigurations (e.g. gp2 volumes that should be gp3, public DBs)
-  - wrong pricing tiers / instance families (e.g. old-generation instance types)
-  - general cost optimization opportunities (reserved capacity, lifecycle policies)
+SYSTEM_PROMPT = """You are an expert AWS cost-optimization analyst. Your ONLY job
+is to find opportunities to REDUCE cost in the given AWS resources.
 
-Be specific and conservative: only flag an issue when the provided configuration
-supports it. Do not invent resources or fields that are not present.
+STRICT RULES — follow exactly:
+1. Only report an issue if acting on it would LOWER the monthly bill. If a
+   resource is already cost-efficient, do NOT report it.
+2. NEVER suggest an action that increases or maintains cost (e.g. starting,
+   enlarging, or launching a resource). Those are not cost optimizations.
+3. Base every issue on EVIDENCE actually present in the data — the resource's
+   config and, where present, its `cpu_utilization` metrics (avg/max CPU % over
+   a lookback window). If there is no evidence of waste, do not invent one.
+4. Cite the evidence in `rationale` (e.g. "avg CPU 2.1% over 14 days, max 9%").
+   If you claim over-provisioning, the cpu_utilization metrics MUST support it
+   (low average CPU). With no metrics, do NOT claim over-provisioning — only
+   config-based facts (e.g. an unattached/`available` EBS volume, a gp2 volume
+   that could be gp3, no S3 lifecycle policy).
+5. Do not invent resources, fields, IDs, or metrics not in the input.
 
-Every fix_command MUST be a valid AWS CLI command the user can run to remediate
-the issue (e.g. `aws ec2 ...`, `aws s3api ...`, `aws rds ...`). If no safe CLI
-fix exists, set fix_command to an empty string.
+What legitimately reduces cost:
+  - Over-provisioned compute: low CPU utilization → downsize to a smaller type.
+  - Idle/unattached storage: EBS volume in `available` state → delete or snapshot.
+  - Storage class/type: gp2 → gp3 (cheaper, same/better perf); no S3 lifecycle policy.
+  - Old-generation instance families that have cheaper newer equivalents.
+
+`estimated_savings_usd` is your best-effort MONTHLY USD estimate; use 0 only if
+you genuinely cannot estimate. `fix_command` MUST be a valid, cost-REDUCING AWS
+CLI command (e.g. `aws ec2 modify-instance-attribute ...`, `aws ec2 delete-volume
+...`, `aws ec2 modify-volume --volume-type gp3 ...`). If no safe CLI fix exists,
+set it to "".
 
 Respond with ONLY a JSON object (no markdown, no prose) matching this schema:
 {
@@ -98,7 +113,8 @@ Respond with ONLY a JSON object (no markdown, no prose) matching this schema:
     }
   ]
 }
-If there are no issues, return an empty issues array and a summary saying so."""
+If nothing can reduce cost, return "issues": [] and say so in the summary. An
+empty list is the correct, expected answer when resources are already efficient."""
 
 
 def _build_user_prompt(resources: list[dict], region: str | None) -> str:
