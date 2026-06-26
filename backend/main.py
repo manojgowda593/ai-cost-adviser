@@ -46,6 +46,7 @@ from aws_scanner import (
 )
 import ai_analyzer
 from ai_analyzer import AIAnalyzerError
+import agent
 import db
 from db import DBNotConfigured
 from progress import hub
@@ -194,12 +195,29 @@ async def _run_analysis(analysis_id: str, req: AnalyzeRequest) -> dict:
             errors.append({"service": meta["label"], "error": e.message, "hint": e.hint})
 
     # --- Step ⑤: AI analysis ---
+    # By default use the agentic analyzer (the AI decides what to investigate via
+    # read-only AWS tools). If it fails (e.g. the model can't tool-call reliably),
+    # fall back to the simpler one-shot analyzer. Set USE_AGENT=false to skip the
+    # agent entirely.
     await hub.push(analysis_id, "Analyzing costs with AI...")
     ai_error: Optional[str] = None
+    use_agent = os.getenv("USE_AGENT", "true").lower() not in ("0", "false", "no")
     try:
-        analysis = await asyncio.to_thread(
-            ai_analyzer.analyze_resources, resources, req.region
-        )
+        if use_agent:
+            try:
+                analysis = await asyncio.to_thread(
+                    agent.analyze_resources_agentic, resources, req.region
+                )
+            except AIAnalyzerError as agent_err:
+                # Agent path failed — fall back to the non-agentic analyzer.
+                await hub.push(analysis_id, f"Agent unavailable ({agent_err.message}); using basic analysis...")
+                analysis = await asyncio.to_thread(
+                    ai_analyzer.analyze_resources, resources, req.region
+                )
+        else:
+            analysis = await asyncio.to_thread(
+                ai_analyzer.analyze_resources, resources, req.region
+            )
     except AIAnalyzerError as e:
         ai_error = e.message
         analysis = {"summary": f"AI analysis failed: {e.message}", "issues": [],
