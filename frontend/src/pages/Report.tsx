@@ -1,22 +1,21 @@
-// Report rendering: summary, estimated savings, and a list of issues with
-// severity badges + copyable AWS CLI fix commands. Exported as a reusable
-// <ReportView> so both the Dashboard (live result) and History (saved result)
-// render identically. The default export is a standalone page that reads the
-// analysis passed via router location state.
+// Report rendering: a summary card (resources scanned / issues / estimated
+// savings) and a list of issues with severity chips + copyable AWS CLI fixes.
+// Exported as a reusable <ReportView> so Dashboard (live) and History (saved)
+// render identically.
 
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { Analysis, AnalyzeResult, Issue } from "../api";
 
-function severityBadge(sev?: Issue["severity"]) {
+function SeverityChip({ sev }: { sev?: Issue["severity"] }) {
   const map: Record<string, string> = {
-    high: "bg-red-500/15 text-red-300 border-red-500/30",
-    medium: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-    low: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+    high: "bg-sev-highSoft text-sev-high",
+    medium: "bg-sev-medSoft text-sev-med",
+    low: "bg-sev-lowSoft text-sev-low",
   };
   const cls = map[sev ?? "low"] ?? map.low;
   return (
-    <span className={`text-xs font-semibold px-2 py-0.5 rounded border ${cls} uppercase`}>
+    <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${cls}`}>
       {sev ?? "low"}
     </span>
   );
@@ -35,11 +34,15 @@ function CopyButton({ text }: { text: string }) {
           /* clipboard unavailable */
         }
       }}
-      className="text-xs px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-gray-200"
+      className="rounded-md border border-line px-2 py-1 text-xs font-medium text-ink-soft transition-colors hover:bg-canvas"
     >
-      {copied ? "Copied!" : "Copy"}
+      {copied ? "Copied" : "Copy"}
     </button>
   );
+}
+
+function usd(n: unknown) {
+  return `$${Number(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
 export function ReportView({
@@ -54,47 +57,38 @@ export function ReportView({
   errors?: { service: string; error: string; hint?: string }[];
 }) {
   const issues = analysis.issues ?? [];
+  const savings = Number(analysis.total_estimated_savings_usd ?? 0);
+
   return (
-    <div className="space-y-6">
-      {/* Summary card: resources scanned, issues found, estimated savings */}
-      <div className="rounded-lg border border-ink-700 bg-ink-800 p-5">
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div>
-            <div className="text-xs uppercase tracking-wide text-gray-500">Resources scanned</div>
-            <div className="text-3xl font-bold text-gray-100">
-              {resourceCount ?? "—"}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-gray-500">Issues found</div>
-            <div className="text-3xl font-bold text-amber-300">{issues.length}</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-gray-500">Estimated savings</div>
-            <div className="text-3xl font-bold text-green-400">
-              ${Number(analysis.total_estimated_savings_usd ?? 0).toLocaleString()}
-            </div>
+    <div className="flex flex-col gap-5">
+      {/* Summary card — savings is the hero */}
+      <div className="card overflow-hidden">
+        <div className="grid sm:grid-cols-3">
+          <Stat label="Resources scanned" value={resourceCount ?? "—"} />
+          <Stat label="Issues found" value={issues.length} divider />
+          <div className="bg-savings-soft p-5">
+            <div className="label text-savings-ink/70">Est. monthly savings</div>
+            <div className="nums mt-1 text-3xl font-semibold text-savings-ink">{usd(savings)}</div>
           </div>
         </div>
-
-        <div className="mt-5 border-t border-ink-700 pt-4">
-          <h2 className="text-sm font-semibold text-gray-400 mb-1">Summary</h2>
-          <p className="text-gray-100 text-sm leading-relaxed">{analysis.summary}</p>
+        <div className="border-t border-line p-5">
+          <div className="label mb-1.5">Summary</div>
+          <p className="text-sm leading-relaxed text-ink-soft">{analysis.summary}</p>
           {scannedServices && scannedServices.length > 0 && (
-            <p className="mt-2 text-xs text-gray-500">Scanned: {scannedServices.join(", ")}</p>
+            <p className="mt-2 text-xs text-ink-muted">Scanned: {scannedServices.join(", ")}</p>
           )}
         </div>
       </div>
 
       {/* Scan errors, if any */}
       {errors && errors.length > 0 && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
-          <h3 className="text-sm font-semibold text-amber-300 mb-2">Some services could not be scanned</h3>
-          <ul className="space-y-1 text-sm text-amber-200/80">
+        <div className="rounded-xl2 border border-sev-med/30 bg-sev-medSoft p-4">
+          <div className="mb-2 text-sm font-semibold text-sev-med">Some services couldn’t be scanned</div>
+          <ul className="flex flex-col gap-1 text-sm text-sev-med/90">
             {errors.map((e, i) => (
               <li key={i}>
                 <span className="font-medium">{e.service}:</span> {e.error}
-                {e.hint && <span className="text-amber-200/50"> — {e.hint}</span>}
+                {e.hint && <span className="text-sev-med/60"> — {e.hint}</span>}
               </li>
             ))}
           </ul>
@@ -102,54 +96,94 @@ export function ReportView({
       )}
 
       {/* Issues */}
-      <div className="space-y-3">
-        {issues.length === 0 && (
-          <div className="rounded-lg border border-ink-700 bg-ink-800 p-5 text-sm text-gray-400">
-            No cost issues were found. 🎉
-          </div>
-        )}
-        {issues.map((issue, i) => (
-          <div key={i} className="rounded-lg border border-ink-700 bg-ink-800 p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  {severityBadge(issue.severity)}
-                  {issue.service && (
-                    <span className="text-xs text-gray-500">{issue.service}</span>
-                  )}
-                  {issue.resource_id && (
-                    <span className="text-xs text-gray-600 font-mono">{issue.resource_id}</span>
-                  )}
+      {issues.length === 0 ? (
+        <div className="card flex items-center gap-3 p-6 text-sm text-ink-soft">
+          <span className="grid h-8 w-8 place-items-center rounded-full bg-savings-soft text-savings">✓</span>
+          No cost-saving issues found — these resources look efficient.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {issues.map((issue, i) => (
+            <div key={i} className="card p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <SeverityChip sev={issue.severity} />
+                    {issue.service && <span className="text-xs font-medium text-ink-soft">{issue.service}</span>}
+                    {issue.resource_name && issue.resource_name !== issue.resource_id && (
+                      <span className="text-xs font-medium text-ink">{issue.resource_name}</span>
+                    )}
+                    {issue.resource_id && (
+                      <span className="nums text-xs text-ink-muted">{issue.resource_id}</span>
+                    )}
+                  </div>
+                  <h3 className="mt-2 font-semibold text-ink" style={{ textWrap: "balance" }}>
+                    {issue.issue}
+                  </h3>
                 </div>
-                <h3 className="mt-2 text-gray-100 font-medium">{issue.issue}</h3>
-                {issue.rationale && (
-                  <p className="mt-1 text-sm text-gray-400">{issue.rationale}</p>
+                {issue.estimated_savings_usd != null && Number(issue.estimated_savings_usd) > 0 && (
+                  <div className="shrink-0 text-right">
+                    <div className="nums font-semibold text-savings-ink">
+                      {usd(issue.estimated_savings_usd)}
+                    </div>
+                    <div className="text-[11px] text-ink-muted">/mo est.</div>
+                  </div>
                 )}
               </div>
-              {issue.estimated_savings_usd != null && (
-                <div className="text-right shrink-0">
-                  <div className="text-green-400 font-semibold">
-                    ${Number(issue.estimated_savings_usd).toLocaleString()}
+
+              {/* Current state — the evidence/history */}
+              {issue.current_state && (
+                <div className="mt-3">
+                  <div className="label mb-1">What we found</div>
+                  <p className="text-sm leading-relaxed text-ink-soft">{issue.current_state}</p>
+                </div>
+              )}
+
+              {/* Recommendation — the reasoned action */}
+              {(issue.recommendation || issue.rationale) && (
+                <div className="mt-3">
+                  <div className="label mb-1">Recommendation</div>
+                  <p className="text-sm leading-relaxed text-ink">
+                    {issue.recommendation || issue.rationale}
+                  </p>
+                </div>
+              )}
+
+              {/* Safety caveat — surfaced prominently for destructive actions */}
+              {(issue.caveats || issue.requires_data_check) && (
+                <div className="mt-3 flex items-start gap-2 rounded-lg border border-sev-med/30 bg-sev-medSoft px-3 py-2">
+                  <span className="mt-0.5 text-sev-med" aria-hidden="true">⚠</span>
+                  <p className="text-xs leading-relaxed text-sev-med">
+                    {issue.caveats ||
+                      "This action can remove data — verify there's nothing critical (snapshot first if unsure) before applying."}
+                  </p>
+                </div>
+              )}
+
+              {issue.fix_command && (
+                <div className="mt-4">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="label">Fix · AWS CLI</span>
+                    <CopyButton text={issue.fix_command} />
                   </div>
-                  <div className="text-xs text-gray-500">/mo est.</div>
+                  <pre className="overflow-x-auto rounded-lg border border-line bg-canvas p-3 text-xs leading-relaxed text-ink-soft">
+                    <code className="font-mono">{issue.fix_command}</code>
+                  </pre>
                 </div>
               )}
             </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
-            {issue.fix_command && (
-              <div className="mt-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-gray-500">Fix command (AWS CLI)</span>
-                  <CopyButton text={issue.fix_command} />
-                </div>
-                <pre className="overflow-x-auto rounded-md bg-ink-900 border border-ink-700 p-3 text-xs text-sky-300 font-mono">
-                  {issue.fix_command}
-                </pre>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+function Stat({ label, value, divider }: { label: string; value: React.ReactNode; divider?: boolean }) {
+  return (
+    <div className={`p-5 ${divider ? "border-line sm:border-l" : ""}`}>
+      <div className="label">{label}</div>
+      <div className="nums mt-1 text-3xl font-semibold text-ink">{value}</div>
     </div>
   );
 }
@@ -161,9 +195,9 @@ export default function Report() {
 
   if (!result) {
     return (
-      <div className="mx-auto max-w-3xl px-4 py-16 text-center">
-        <p className="text-gray-400">No report to display.</p>
-        <button onClick={() => navigate("/")} className="mt-4 text-accent hover:underline">
+      <div className="mx-auto max-w-3xl px-8 py-16 text-center">
+        <p className="text-ink-muted">No report to display.</p>
+        <button onClick={() => navigate("/")} className="mt-4 font-medium text-brand hover:underline">
           Back to dashboard
         </button>
       </div>
@@ -171,17 +205,21 @@ export default function Report() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      <button onClick={() => navigate(-1)} className="text-sm text-gray-400 hover:text-white mb-4">
-        ← Back
-      </button>
-      <h1 className="text-2xl font-bold text-white mb-6">Analysis Report</h1>
-      <ReportView
-        analysis={result.analysis}
-        scannedServices={result.scanned_services}
-        resourceCount={result.resource_count}
-        errors={result.errors}
-      />
+    <div>
+      <header className="border-b border-line bg-surface/80 px-5 py-4 backdrop-blur md:px-8 md:py-5">
+        <button onClick={() => navigate(-1)} className="mb-1 text-sm text-ink-muted hover:text-ink">
+          ← Back
+        </button>
+        <h1 className="text-xl font-semibold text-ink">Analysis report</h1>
+      </header>
+      <div className="mx-auto max-w-4xl px-5 py-6 md:px-8 md:py-8">
+        <ReportView
+          analysis={result.analysis}
+          scannedServices={result.scanned_services}
+          resourceCount={result.resource_count}
+          errors={result.errors}
+        />
+      </div>
     </div>
   );
 }

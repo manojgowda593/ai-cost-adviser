@@ -1,6 +1,6 @@
 // History (step ⑥ read side): past analyses for the authenticated user.
 // Lists services scanned, date, issues found, and estimated savings. Clicking
-// a row opens the full Report page for that analysis (deep-linkable).
+// a row opens the full Report page for that analysis.
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -20,12 +20,14 @@ function toResult(it: HistoryItem): AnalyzeResult {
     resource_count: it.resources_scanned,
     resources: [],
     errors:
-      (it.analysis_result?.errors as
-        | { service: string; error: string; hint?: string }[]
-        | undefined) ?? [],
+      (it.analysis_result?.errors as { service: string; error: string; hint?: string }[] | undefined) ?? [],
     analysis,
     status: it.status === "failed" ? "failed" : "complete",
   };
+}
+
+function usd(n: unknown) {
+  return `$${Number(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
 export default function History() {
@@ -43,55 +45,62 @@ export default function History() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      <h1 className="text-2xl font-bold text-white mb-6">History</h1>
+    <div>
+      <header className="border-b border-line bg-surface/80 px-5 py-4 backdrop-blur md:px-8 md:py-5">
+        <h1 className="text-xl font-semibold text-ink">History</h1>
+        <p className="mt-0.5 text-sm text-ink-muted">Past analyses, newest first. Select one to open the full report.</p>
+      </header>
 
-      {loading && <p className="text-sm text-gray-400">Loading…</p>}
-      {error && (
-        <div className="rounded-md bg-red-500/10 border border-red-500/30 px-3 py-2 text-sm text-red-300">
-          {error}
-        </div>
-      )}
+      <div className="mx-auto max-w-4xl px-5 py-6 md:px-8 md:py-8">
+        {loading && <p className="text-sm text-ink-muted">Loading…</p>}
+        {error && (
+          <div className="rounded-lg border border-sev-high/30 bg-sev-highSoft px-3 py-2 text-sm text-sev-high">
+            {error}
+          </div>
+        )}
 
-      {!loading && !error && items.length === 0 && (
-        <p className="text-sm text-gray-400">No analyses yet. Run one from the dashboard.</p>
-      )}
-
-      <div className="space-y-3">
-        {items.map((it) => {
-          const date = it.created_at ? new Date(it.created_at).toLocaleString() : "—";
-          return (
-            <button
-              key={it.id}
-              onClick={() => navigate("/report", { state: toResult(it) })}
-              className="w-full flex items-center justify-between gap-4 p-4 text-left rounded-lg border border-ink-700 bg-ink-800 hover:border-accent/50 transition-colors"
-            >
-              <div>
-                <div className="text-gray-100 font-medium">{it.services_scanned || "—"}</div>
-                <div className="text-xs text-gray-500 mt-0.5">{date}</div>
-              </div>
-              <div className="flex items-center gap-6 text-sm shrink-0">
-                <span className="text-gray-400">{it.issues_found} issue(s)</span>
-                <span className="text-green-400 font-semibold">
-                  ${Number(it.estimated_savings ?? 0).toLocaleString()}
-                </span>
-                <span
-                  className={`text-xs px-2 py-0.5 rounded border ${
-                    it.status === "complete"
-                      ? "border-green-500/30 text-green-300"
-                      : it.status === "failed"
-                      ? "border-red-500/30 text-red-300"
-                      : "border-gray-500/30 text-gray-400"
-                  }`}
-                >
-                  {it.status}
-                </span>
-                <span className="text-gray-500">→</span>
-              </div>
+        {!loading && !error && items.length === 0 && (
+          <div className="card p-8 text-center">
+            <p className="text-sm text-ink-soft">No analyses yet.</p>
+            <button onClick={() => navigate("/")} className="mt-3 text-sm font-medium text-brand hover:underline">
+              Run your first analysis →
             </button>
-          );
-        })}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2.5">
+          {items.map((it) => {
+            const date = it.created_at ? new Date(it.created_at).toLocaleString() : "—";
+            return (
+              <button
+                key={it.id}
+                onClick={() => navigate("/report", { state: toResult(it) })}
+                className="card flex items-center justify-between gap-4 p-4 text-left transition-all hover:border-line2 hover:shadow-cardHover"
+              >
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-ink">{it.services_scanned || "—"}</div>
+                  <div className="mt-0.5 text-xs text-ink-muted">{date}</div>
+                </div>
+                <div className="flex shrink-0 items-center gap-3 text-sm sm:gap-5">
+                  <span className="nums hidden text-ink-soft sm:inline">{it.issues_found} issues</span>
+                  <span className="nums font-semibold text-savings-ink">{usd(it.estimated_savings)}</span>
+                  <StatusPill status={it.status} />
+                  <span className="text-ink-muted">→</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    complete: "bg-savings-soft text-savings-ink",
+    failed: "bg-sev-highSoft text-sev-high",
+  };
+  const cls = map[status] ?? "bg-canvas text-ink-muted";
+  return <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${cls}`}>{status}</span>;
 }

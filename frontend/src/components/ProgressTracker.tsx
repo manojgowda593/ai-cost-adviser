@@ -42,33 +42,34 @@ export default function ProgressTracker({ analysisId, done }: Props) {
   if (!analysisId) return null;
 
   return (
-    <div className="mt-6 rounded-lg border border-ink-700 bg-ink-800 p-4">
-      <h3 className="text-sm font-semibold text-gray-300 mb-3">Progress</h3>
-      <ul className="space-y-2">
+    <div className="card mt-6 p-5">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="label">Progress</span>
+        {!done && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand" />}
+      </div>
+      <ol className="flex flex-col gap-2.5">
         {messages.map((m, i) => {
           const isComplete = m === "Analysis complete";
-          const isLast = i === messages.length - 1;
+          const isActive = i === messages.length - 1 && !done && !isComplete;
           return (
-            <li key={i} className="flex items-center gap-2 text-sm">
+            <li key={i} className="flex items-center gap-3 text-sm">
               <span
-                className={
+                className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[10px] ${
                   isComplete
-                    ? "text-green-400"
-                    : isLast && !done
-                    ? "text-accent animate-pulse"
-                    : "text-gray-400"
-                }
+                    ? "border-savings bg-savings text-white"
+                    : isActive
+                    ? "border-brand text-brand"
+                    : "border-line bg-canvas text-ink-muted"
+                }`}
               >
-                {isComplete ? "✓" : isLast && !done ? "◐" : "•"}
+                {isComplete ? "✓" : isActive ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand" /> : "•"}
               </span>
-              <span className={isComplete ? "text-green-300" : "text-gray-200"}>{m}</span>
+              <span className={isComplete ? "font-medium text-savings-ink" : "text-ink-soft"}>{m}</span>
             </li>
           );
         })}
-        {messages.length === 0 && (
-          <li className="text-sm text-gray-500">Connecting…</li>
-        )}
-      </ul>
+        {messages.length === 0 && <li className="text-sm text-ink-muted">Connecting…</li>}
+      </ol>
     </div>
   );
 }

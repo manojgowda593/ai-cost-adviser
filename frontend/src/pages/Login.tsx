@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { ApiError } from "../api";
+import AuthShell, { authInputClass } from "./AuthShell";
 
 export default function Login() {
   const { login } = useAuth();
@@ -26,55 +27,49 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-full flex items-center justify-center px-4">
-      <form
-        onSubmit={onSubmit}
-        className="w-full max-w-sm rounded-xl border border-ink-700 bg-ink-800 p-8 shadow-xl"
-      >
-        <h1 className="text-2xl font-bold text-white mb-1">Welcome back</h1>
-        <p className="text-sm text-gray-400 mb-6">Sign in to your AI Cost Adviser account.</p>
-
+    <AuthShell title="Welcome back" subtitle="Sign in to review your AWS savings.">
+      <form onSubmit={onSubmit} className="flex flex-col gap-4">
         {error && (
-          <div className="mb-4 rounded-md bg-red-500/10 border border-red-500/30 px-3 py-2 text-sm text-red-300">
+          <div className="rounded-lg border border-sev-high/30 bg-sev-highSoft px-3 py-2 text-sm text-sev-high">
             {error}
           </div>
         )}
-
-        <label className="block text-sm text-gray-300 mb-1">Email</label>
-        <input
-          type="email"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full mb-4 rounded-md bg-ink-900 border border-ink-600 px-3 py-2 text-sm text-gray-100 focus:border-accent focus:outline-none"
-          placeholder="you@example.com"
-        />
-
-        <label className="block text-sm text-gray-300 mb-1">Password</label>
-        <input
-          type="password"
-          required
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full mb-6 rounded-md bg-ink-900 border border-ink-600 px-3 py-2 text-sm text-gray-100 focus:border-accent focus:outline-none"
-          placeholder="••••••••"
-        />
-
+        <div>
+          <label className="label mb-1.5 block">Email</label>
+          <input
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className={authInputClass}
+            placeholder="you@company.com"
+          />
+        </div>
+        <div>
+          <label className="label mb-1.5 block">Password</label>
+          <input
+            type="password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className={authInputClass}
+            placeholder="••••••••"
+          />
+        </div>
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-md bg-accent hover:bg-accent-hover py-2 text-sm font-semibold text-ink-900 disabled:opacity-50"
+          className="mt-1 rounded-lg bg-brand py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
         >
           {loading ? "Signing in…" : "Sign in"}
         </button>
-
-        <p className="mt-4 text-center text-sm text-gray-400">
+        <p className="text-center text-sm text-ink-muted">
           No account?{" "}
-          <Link to="/signup" className="text-accent hover:underline">
-            Sign up
+          <Link to="/signup" className="font-medium text-brand hover:underline">
+            Create one
           </Link>
         </p>
       </form>
-    </div>
+    </AuthShell>
   );
 }

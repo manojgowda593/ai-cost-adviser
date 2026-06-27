@@ -82,11 +82,16 @@ export interface Issue {
   service?: string;
   category?: string;
   resource_id?: string;
+  resource_name?: string;
   issue?: string;
   severity?: "high" | "medium" | "low";
+  current_state?: string;
+  recommendation?: string;
   estimated_savings_usd?: number;
+  requires_data_check?: boolean;
+  caveats?: string;
   fix_command?: string;
-  rationale?: string;
+  rationale?: string; // legacy fallback
 }
 
 export interface Analysis {
